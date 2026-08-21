@@ -1,0 +1,11 @@
+---
+title: "Measuring Flow Speed and Flow Depth of the Aare River"
+output: html_document
+---
+
+# A Step by Step Manual to Recreate our Sensors
+
+## The Water Wheel
+
+
+## The Depth Sensor
