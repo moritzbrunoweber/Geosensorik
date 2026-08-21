@@ -5,7 +5,23 @@ output: html_document
 
 # A Step by Step Manual to Recreate our Sensors
 
+
 ## The Water Wheel
+
+### Bulding the Wheel
+
+### Building the Hardware
+
+### Building the Software
 
 
 ## The Depth Sensor
+
+### Bulding the Wheel (dieses Kapitel braucht's hier eigentlich nicht, vllt eine Zeile dazu, dass der Sensor schon vorgefertigt ist)
+
+### Building the Hardware
+
+### Building the Software
+
+
+## Compiling the Sensors' Hardware and Installing them in a Stream
