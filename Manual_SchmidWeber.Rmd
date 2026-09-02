@@ -2,22 +2,34 @@
 title: "Measuring Flow Speed and Flow Depth of the Aare River"
 output: html_document
 ---
+library(here)
 
 # A Step by Step Manual to Recreate our Sensors
 
 
 ## The Water Wheel
+To measure flow speed we created a small but reliable water wheel, which measures RPM via a reed sensor and saves the measurements on a local SD-card. The construction is simple, cheap, and fast.
 
 ### Bulding the Wheel
+The complete water wheel consists of four main parts: the wheel itself, the floaters, the reed sensor, and connecting tiles, holding everything in place.
+The wheel is made of a synthetic plastic. It needs to be cut out in two disks with a radius of r = 12 cm. The eight shovels are simple 6 x 6 cm squares, made out of the same material. Before assembling the wheel, three holes with a diameter of d = 5 mm need to be drilled into the disks. One each in the disks' centers and one approximately 1 cm from one of the disk's edges - later, the magnet triggering the reed sensor will be installed there. Centered on the center holes, one plastic bearing with a 5 mm hole needs to be glued onto each disc. This is done most effectively with hot glue. Now, the wheel can be assembled. Using more hot glue, the eight shovels are glued to one of the disks. Afterwards, the other disk is glued on to finish the wheel. Into the prepared hole, a magnet with a diameter of 5 mm is placed and fixed in place with hot glue.
+The floaters are two wooden cuboids of a length of approximately 30 cm and a base of approximately 6 x 6 cm. Per cuboid, there need to be two wooden hinges. One part is fixed to the cuboid, the other is attached to the fixed part with a screw and movable. The movable part needs to be drilled with six 5 mm holes from the outermost edge towards the inside in 1 cm increments. The fixed part of the hinge is approximately 6 x 2 cm and the movable part 12 x 2 cm. These holes allow for variable vertical and horizontal placement of the water wheel in relation to the floaters and, ultimately, to the water surface.
+The reed sensor - its exact composition is described in the following chapter "Building the Hardware" - is hot glued onto a piece of wood, measuring the diameter of the water wheel in length and approximately 3 cm in width. A 5 mm hole is drilled at its other end.
+An axle with a diameter of 5 mm and a length of approximately 25 cm needs to be prepared. One by one, the first hinge (with the attached floater), the reed sensor, the water wheel, and the second hinge-floater-contraption need to be slid onto the axle. To increase its stability, two metal rods are mounted on both sides, connecting the otherwise separate floaters.
+
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 1: The Water Wheel (created by authors)"}
+knitr::include_graphics(here::here("bingbong.jpg"))
+```
 
 ### Building the Hardware
+The hardware to the water wheel is very simple. A reed switch needs to be soldered between two cables which have pins on their other sides. These pins are plugged into the arduino, which is powered by a battery.
 
 ### Building the Software
 
 
 ## The Depth Sensor
 
-### Bulding the Wheel (dieses Kapitel braucht's hier eigentlich nicht, vllt eine Zeile dazu, dass der Sensor schon vorgefertigt ist)
+### Bulding the Depth Sensor (dieses Kapitel braucht's hier eigentlich nicht, vllt eine Zeile dazu, dass der Sensor schon vorgefertigt ist)
 
 ### Building the Hardware
 
