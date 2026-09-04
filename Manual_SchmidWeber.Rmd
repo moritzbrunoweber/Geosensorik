@@ -302,6 +302,257 @@ As the signal from the other Arduino is not perfectly predictable (RTC drifting)
 
 #### Full code
 
+```         
+#include <Wire.h>             // Communicate with I2C devices
+#include <DFRobot_ADS1115.h>  // Library for the ADC
+#include <U8g2lib.h>          // Display library for Seeed Expansion Board
+#include <RTClib.h>           // Adafruit RTClib 
+#include <SPI.h>              // Communicate with SPI devices
+#include <SD.h>               // SD Card support 
+
+#define TRIGGER_PIN D3   // Pin that receives the input from Arduino 1
+#define SD_CS_PIN D2     // SD CS pin on Seeed Expansion Board
+
+RTC_PCF8563 rtc;         // Initialise the RTC chip
+
+#define RANGE 5000       // Maximum depth of Sensor
+#define VREF 3300        // Reference voltage of Arduino 
+#define CURRENT_INIT 4   // Initial current at 0 depth
+#define DENSITY_WATER 1  // Water density (temp. dependent)
+
+DFRobot_ADS1115 ads(&Wire); // Initialise ADC
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE); // Initialise the OLED display
+
+// Set initial values
+int16_t dataVoltage = 0; // Voltage from the ADC
+float dataCurrent = 0.0; // Current derived from voltage
+float depth = 0.0;       // Water depth
+unsigned long measurementNum = 0; // Sequential measurement index
+
+// Interrupt flags
+volatile bool pulseTriggered = false;
+
+unsigned long lastSyncMillis = 0; // Time since last sync
+bool hasSynced = false;
+
+unsigned long lastOledUpdate = 0; 
+const unsigned long OLED_INTERVAL = 200; // Display update frequency
+
+// Hardware Interrupt Service Routine (ISR)
+void pulseISR() {
+  pulseTriggered = true;
+}
+
+// Read voltage from ADC and convert into current and depth
+void readPressureSensor() {
+  if (ads.checkADS1115()) {
+    dataVoltage = ads.readVoltage(0);
+    dataCurrent = dataVoltage / 120.0;
+    depth = (dataCurrent - CURRENT_INIT) * (RANGE / DENSITY_WATER / 16.0);
+    if (depth < 0) depth = 0.0;
+  }
+}
+
+void setup(void) {
+  Serial.begin(115200);
+  
+  pinMode(TRIGGER_PIN, INPUT_PULLDOWN); 
+  // Attach interrupt to catch pulse instantly on rising edge
+  attachInterrupt(digitalPinToInterrupt(TRIGGER_PIN), pulseISR, RISING);
+
+  // Configure ADC
+  ads.setAddr_ADS1115(ADS1115_IIC_ADDRESS0);
+  ads.setGain(eGAIN_TWOTHIRDS);
+  ads.setMode(eMODE_SINGLE);
+  ads.setRate(eRATE_128);
+  ads.setOSMode(eOSMODE_SINGLE);
+  ads.init();
+
+  // Initialize RTC
+  if (!rtc.begin()) {
+    Serial.println("RTC not found!");
+  } else {
+    // Explicit sync to system compile time to fix corrupted register values
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); 
+    Serial.println("RTC time synchronized.");
+  }
+
+  // Initialise OLED display
+  u8g2.begin();
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_ncenB08_tr);
+  u8g2.drawStr(0, 15, "Initializing...");
+  u8g2.sendBuffer();
+
+  // Initialise SD card
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("SD initialization failed!");
+  } else {
+    if (!SD.exists("presslog.csv")) {
+      File logFile = SD.open("presslog.csv", FILE_WRITE);
+      if (logFile) {
+        logFile.println("Measurement_Num,Timestamp,Voltage_mV,Current_mA,Depth_mm");
+        logFile.close();
+      }
+    }
+  }
+}
+
+void loop(void) {
+  unsigned long currentMillis = millis();
+
+  // 1. PROCESS PULSE EVENT FROM INTERRUPT
+  if (pulseTriggered) {
+    pulseTriggered = false; // Reset interrupt flag
+    
+    measurementNum++;                 // Increase measurement index
+    lastSyncMillis = currentMillis;   // Set last sync time
+    hasSynced = true;
+
+    readPressureSensor();             // Read pressure sensor
+
+// Fetch RTC Timestamp
+    DateTime now = rtc.now();
+    char timestamp[20];
+    snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+             now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+
+
+    File logFile = SD.open("presslog.csv", FILE_WRITE); // Write data to SD card
+    if (logFile) {
+      logFile.print(measurementNum);
+      logFile.print(",");
+      logFile.print(timestamp);
+      logFile.print(",");
+      logFile.print(dataVoltage);
+      logFile.print(",");
+      logFile.print(dataCurrent, 2);
+      logFile.print(",");
+      logFile.println(depth, 1);
+      logFile.close();
+
+      Serial.print("Interrupt Sync Success! Recorded #");
+      Serial.println(measurementNum);
+    } else {
+      Serial.println("SD Write Error!");
+    }
+  }
+
+  // 2. PERIODIC DISPLAY REFRESH
+  if (currentMillis - lastOledUpdate >= OLED_INTERVAL) {
+    lastOledUpdate = currentMillis;
+
+    readPressureSensor();
+
+    unsigned long secondsSinceSync = 0;
+    if (hasSynced) {
+      secondsSinceSync = (currentMillis - lastSyncMillis) / 1000;
+    }
+
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 10, "PRESSURE GAUGE");
+    u8g2.drawHLine(0, 12, 128);
+
+    u8g2.setCursor(0, 24);
+    u8g2.print("Log #: ");
+    u8g2.print(measurementNum);
+    u8g2.print(" | ");
+    if (hasSynced) {
+      u8g2.print(secondsSinceSync);
+      u8g2.print("s ago");
+    } else {
+      u8g2.print("No sync");
+    }
+
+    u8g2.setCursor(0, 36);
+    u8g2.print("Volt: ");
+    u8g2.print(dataVoltage);
+    u8g2.print("mV ");
+    u8g2.print(dataCurrent, 1);
+    u8g2.print("mA");
+
+    u8g2.setFont(u8g2_font_7x14B_tf);
+    u8g2.setCursor(0, 56);
+    u8g2.print("Depth: ");
+    u8g2.print(depth, 1);
+    u8g2.print(" mm");
+
+    u8g2.sendBuffer();
+  }
+}
+```
+
 ## Compiling the Sensors' Hardware and Installing them in a Stream
 
+### Water wheel
+
+The water wheel can be tied to any fixed object above the water level with two strings going to eyelet screws on the floats. In our case we attached it to a downed tree lying in the water, but pieces of rebar sticking out would work too. The flow direction should be relatively consistent as the wheel may overturn otherwise. Different positions of the screws on the floats can affect how the wheel sits in the water - ideally, it is perfectly level.
+
+### Pressure sensor
+
+The pressure sensor was attached to a piece of rebar with zipties and this was then hammered into the ground. The position of the pressure sensor should be as close to the wheel as possible, but ideally downstream so it does not negatively affect flow.
+
+### Power and Arduinos
+
+The Arduinos, batteries and all the voltage and signal converters were installed on a piece of foam board that fits inside a RAKO box with cover. The wires were fed out through waterproof bungs. This box can be installed anywhere the wires reach, with the wire of the pressure sensor theoretically being the limiting factor. The box was attached to the same downed tree with two ratchet straps.
+
 ## List of materials required
+
+### Arduinos
+
+2 Seeeduino Xiao
+
+2 Seeeduino expansion boards
+
+2 USB-A to USB-C power cables
+
+### Power
+
+2 12V batteries
+
+1 12V Fuse block
+
+2 3A Fuses
+
+### Water wheel
+
+General wood pieces and screws for the frame
+
+Foam board for the water wheel
+
+Hot glue gun
+
+1 Magnet
+
+1 Reed switch
+
+2 Wires and pins
+
+2 Eyelet screws
+
+2 Metal rods and mounts for stability
+
+### Pressure sensor 
+
+1 DfRobot KIT0139 Pressure sensor
+
+1 SEN0262 Current-Voltage-Converter
+
+1 ADS1115 ADC
+
+### Waterproofing / Mounting
+
+Wires/pins for internal connections
+
+1 RAKO box with cover
+
+2 Waterproof bungs for the wires
+
+1 Piece of rebar and zipties for pressure sensor
+
+String for attaching water wheel
+
+2 Straps for mounting the box
+
+## Data analysis in R
