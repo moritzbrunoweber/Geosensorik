@@ -489,6 +489,10 @@ void loop(void) {
 
 The water wheel can be tied to any fixed object above the water level with two strings going to eyelet screws on the floats. In our case we attached it to a downed tree lying in the water, but pieces of rebar sticking out would work too. The flow direction should be relatively consistent as the wheel may overturn otherwise. Different positions of the screws on the floats can affect how the wheel sits in the water - ideally, it is perfectly level.
 
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 2: The complete installation (taken by authors)"}
+knitr::include_graphics(here::here("Installed.jpg"))
+```
+
 ### Pressure sensor
 
 The pressure sensor was attached to a piece of rebar with zipties and this was then hammered into the ground. The position of the pressure sensor should be as close to the wheel as possible, but ideally downstream so it does not negatively affect flow.
@@ -496,6 +500,14 @@ The pressure sensor was attached to a piece of rebar with zipties and this was t
 ### Power and Arduinos
 
 The Arduinos, batteries and all the voltage and signal converters were installed on a piece of foam board that fits inside a RAKO box with cover. The wires were fed out through waterproof bungs. This box can be installed anywhere the wires reach, with the wire of the pressure sensor theoretically being the limiting factor. The box was attached to the same downed tree with two ratchet straps.
+
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 3: Schematic of the wiring in the box (created by authors)"}
+knitr::include_graphics(here::here("Schematic.png"))
+```
+
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 4: The internals of the box (taken by authors)"}
+knitr::include_graphics(here::here("Box.jpg"))
+```
 
 ## List of materials required
 
