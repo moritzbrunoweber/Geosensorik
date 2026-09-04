@@ -266,15 +266,41 @@ void loop() {
 
 ### Building the Depth Sensor
 
-While the pressure sensor comes as a complete unit, powering it and measuring the values from it is a bit more involved than just connecting it to the Arduino and reading the signal.
+While the pressure sensor comes as a complete unit, powering it and measuring the values from it is a bit more involved than just connecting it to the Arduino and reading the signal. The sensor comes on a long cable that includes a pressure relief tube inside it, so it automatically accounts for changes in ambient pressure.
 
 ### Building the Hardware
 
 #### General wiring setup
 
-The sensor is of the common 4-20mA type analog sensor. It requires 12V power directly from the battery and a current-to-voltage-converter is connect to the circuit in series. The voltage is then fed into a digital-analog-converter, which relays the data to the Arduino over the I2C protocol.
+The sensor is of the common 4-20mA type analog sensor. It requires 12V power directly from the battery and a current-to-voltage-converter is connect to the circuit in series. The voltage is then fed into a digital-analog-converter, which relays the data to the Arduino over the I2C protocol. This data is then used to calculate the water depth.
+
+#### Interference/Crosstalk/Grounding problem
+
+When the voltage converter board for the Arduino and the pressure sensor 12V power are both connected to the same battery, this causes an issue in that the pressure reported is always around 65cm too deep and the signal fluctuates. We were not able to find out exactly what causes that problem, but an easy solution was to just install a second battery that only powers the pressure sensor. Using a galvanically isolated DC-DC-converter would likely also solve the problem while only requiring one battery.
 
 ### Building the Software
+
+#### Basics
+
+At its core, the Arduino converts the voltage data received over I2C back to the current and then applies the linear relationship between it and depth to calculate the latter. This requires setting the possible current range (4-20mA in our case) and the maximum depth (5m in our case). Optionally, the water density can also be set.
+
+#### Data storage
+
+The Arduino saves the following to the SD-Card: A running counter for each measurement, the real-time timestamp for each measurement, the voltage from the converter, the current in the circuit and the water depth. The data is saved in a CSV file.
+
+#### Display output
+
+For easy troubleshooting, the OLED display on the Arduino was configured to display the following: The last measurement index, the time since the last signal from the other Arduino and the live voltage, current and depth data.
+
+#### Communication with second Arduino
+
+To ensure synchronised data points, the Arduino waits for pin D3 to receive the signal from the other one and saves the data to the SD card whenever it is received. The signal was never missed in our testing, but if that were to happen, the inclusion of the timestamp in both datasets would allow for a nearest-neighbour-algorithm so resync the two datasets.
+
+#### Interrupts
+
+As the signal from the other Arduino is not perfectly predictable (RTC drifting), a hardware interrupt was used so that it takes priority over any other task, ensuring that no signals are missed due to updating the screen.
+
+#### Full code
 
 ## Compiling the Sensors' Hardware and Installing them in a Stream
 
