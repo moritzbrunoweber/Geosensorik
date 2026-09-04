@@ -2,38 +2,280 @@
 title: "Measuring Flow Speed and Flow Depth of the Aare River"
 output: html_document
 ---
+
 library(here)
 
 # A Step by Step Manual to Recreate our Sensors
 
-
 ## The Water Wheel
+
 To measure flow speed we created a small but reliable water wheel, which measures RPM via a reed sensor and saves the measurements on a local SD-card. The construction is simple, cheap, and fast.
 
 ### Bulding the Wheel
-The complete water wheel consists of four main parts: the wheel itself, the floaters, the reed sensor, and connecting tiles, holding everything in place.
-The wheel is made of a synthetic plastic. It needs to be cut out in two disks with a radius of r = 12 cm. The eight shovels are simple 6 x 6 cm squares, made out of the same material. Before assembling the wheel, three holes with a diameter of d = 5 mm need to be drilled into the disks. One each in the disks' centers and one approximately 1 cm from one of the disk's edges - later, the magnet triggering the reed sensor will be installed there. Centered on the center holes, one plastic bearing with a 5 mm hole needs to be glued onto each disc. This is done most effectively with hot glue. Now, the wheel can be assembled. Using more hot glue, the eight shovels are glued to one of the disks. Afterwards, the other disk is glued on to finish the wheel. Into the prepared hole, a magnet with a diameter of 5 mm is placed and fixed in place with hot glue.
-The floaters are two wooden cuboids of a length of approximately 30 cm and a base of approximately 6 x 6 cm. Per cuboid, there need to be two wooden hinges. One part is fixed to the cuboid, the other is attached to the fixed part with a screw and movable. The movable part needs to be drilled with six 5 mm holes from the outermost edge towards the inside in 1 cm increments. The fixed part of the hinge is approximately 6 x 2 cm and the movable part 12 x 2 cm. These holes allow for variable vertical and horizontal placement of the water wheel in relation to the floaters and, ultimately, to the water surface.
-The reed sensor - its exact composition is described in the following chapter "Building the Hardware" - is hot glued onto a piece of wood, measuring the diameter of the water wheel in length and approximately 3 cm in width. A 5 mm hole is drilled at its other end.
-An axle with a diameter of 5 mm and a length of approximately 25 cm needs to be prepared. One by one, the first hinge (with the attached floater), the reed sensor, the water wheel, and the second hinge-floater-contraption need to be slid onto the axle. To increase its stability, two metal rods are mounted on both sides, connecting the otherwise separate floaters.
+
+The complete water wheel consists of four main parts: the wheel itself, the floaters, the reed sensor, and connecting tiles, holding everything in place. The wheel is made of a synthetic plastic. It needs to be cut out in two disks with a radius of r = 12 cm. The eight shovels are simple 6 x 6 cm squares, made out of the same material. Before assembling the wheel, three holes with a diameter of d = 5 mm need to be drilled into the disks. One each in the disks' centers and one approximately 1 cm from one of the disk's edges - later, the magnet triggering the reed sensor will be installed there. Centered on the center holes, one plastic bearing with a 5 mm hole needs to be glued onto each disc. This is done most effectively with hot glue. Now, the wheel can be assembled. Using more hot glue, the eight shovels are glued to one of the disks. Afterwards, the other disk is glued on to finish the wheel. Into the prepared hole, a magnet with a diameter of 5 mm is placed and fixed in place with hot glue. The floaters are two wooden cuboids of a length of approximately 30 cm and a base of approximately 6 x 6 cm. Per cuboid, there need to be two wooden hinges. One part is fixed to the cuboid, the other is attached to the fixed part with a screw and movable. The movable part needs to be drilled with six 5 mm holes from the outermost edge towards the inside in 1 cm increments. The fixed part of the hinge is approximately 6 x 2 cm and the movable part 12 x 2 cm. These holes allow for variable vertical and horizontal placement of the water wheel in relation to the floaters and, ultimately, to the water surface. The reed sensor - its exact composition is described in the following chapter "Building the Hardware" - is hot glued onto a piece of wood, measuring the diameter of the water wheel in length and approximately 3 cm in width. A 5 mm hole is drilled at its other end. An axle with a diameter of 5 mm and a length of approximately 25 cm needs to be prepared. One by one, the first hinge (with the attached floater), the reed sensor, the water wheel, and the second hinge-floater-contraption need to be slid onto the axle. To increase its stability, two metal rods are mounted on both sides, connecting the otherwise separate floaters.
 
 ```{r, echo=FALSE, out.width="100%", fig.cap="Figure 1: The Water Wheel (created by authors)"}
 knitr::include_graphics(here::here("bingbong.jpg"))
 ```
 
 ### Building the Hardware
-The hardware to the water wheel is very simple. A reed switch needs to be soldered between two cables which have pins on their other sides. These pins are plugged into the arduino, which is powered by a battery.
+
+The hardware to the water wheel is very simple. A reed switch needs to be soldered between two cables which have pins on their other sides. These pins are plugged into the arduino, which is powered by a 12V battery, connected to a voltage converter board that provides a 5V USB output.
 
 ### Building the Software
 
+#### Basics
+
+The very basics of the software are simple, as the Arduino only has to sense when the two wires connected to the reed sensor and a ground and data pin are bridged. In practice, this also requires implementing a debounce of 50ms, meaning that if the pins disconnect and are bridged again within 50ms, only one pulse will be counted to avoid erroneous inputs when the reed switch quickly bounces between states as the magnet passes by.
+
+#### Data storage
+
+The Arduino saves the following to the SD-Card: A running counter for each measurement, the real-time timestamp for each measurement, the number of pulses during that one-minute interval and the total number of pulses since starting the measurement. The data is saved in a CSV file.
+
+#### Display output
+
+For easy troubleshooting, the OLED display on the Arduino was configured to display the following: The number of pulses in the current interval, the RPM from the last two pulses, the time until the next interval and the estimated flow velocity taking into account the radius and efficiency of the wheel.
+
+#### Communication with second Arduino
+
+Due to time constraints, the pressure sensor data was measured and saved with a second Arduino. To ensure that both Arduinos save their data points at the exact same moment, whenever an interval is done and the data is saved, it also sets pin D3 high, which the second Arduino is listening for and then also saves the pressure data. This also required the ground pins on both to be connected.
+
+#### Interrupts
+
+As the signal from the reed switch is irregular and unpredictable, a hardware interrupt was used so that a signal from the switch takes priority over any other task, ensuring that no signals are missed due to updating the screen.
+
+#### Full code
+
+```         
+#include <SPI.h>  // Communicate with SPI devices
+#include <SD.h>   // SD Card support 
+#include <Wire.h>     // Communicate with I2C devices
+#include <RTClib.h>   // Adafruit RTClib for RTC Clock
+#include <U8g2lib.h>  // Display library for Seeed Expansion Board
+
+#define BUTTON_PIN D0    // Pin the reed switch is connected to (besides ground)
+#define PULSE_OUT_PIN D3    // Signal output pin to secondary Arduino 
+#define SD_CS_PIN D2        // SD CS pin on Seeed Expansion Board
+
+// ----------------------------------------------------
+// WATER WHEEL CONFIGURATION
+// ----------------------------------------------------
+const float WHEEL_RADIUS_M = 0.12;     // Wheel radius in meters 
+const float WHEEL_EFFICIENCY = 0.85;   // Factor 0.0 - 1.0 (Not used as we did not calibrate due to time constraints)
+// ----------------------------------------------------
+
+RTC_PCF8563 rtc;    // Initialise the RTC chip
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);   // Initialise the OLED display
+
+// Volatile variables shared with the Interrupt Service Routine (ISR)
+volatile unsigned long intervalPulses = 0;  // Pulses in current 1-minute window
+volatile unsigned long totalPulses = 0;     // Total switch pulses over runtime
+volatile unsigned long lastPulseTime = 0;   // Timestamp of last valid pulse
+volatile unsigned long pulseDelta = 0;       // Time between last two pulses (ms)
+volatile bool newPulseDetected = false;
+
+// Sequential measurement index for each minute
+unsigned long measurementNum = 0;
+
+// Calculated Real-time speed
+float currentRpm = 0.0;
+
+// Timing intervals
+unsigned long lastLogTime = 0;
+const unsigned long LOG_INTERVAL = 60000; // Set how long an interval takes (1min in this case)
+
+unsigned long lastOledUpdate = 0;
+const unsigned long OLED_INTERVAL = 200;  // Refresh screen every 200ms
+
+// ----------------------------------------------------
+// HARDWARE INTERRUPT SERVICE ROUTINE (ISR)
+// ----------------------------------------------------
+void reedISR() {
+  static unsigned long lastInterruptTime = 0;
+  unsigned long interruptTime = millis();
+
+  // 50ms hardware debounce inside , increase the counter
+  if (interruptTime - lastInterruptTime > 200) {
+    intervalPulses++;
+    totalPulses++;
+    
+    if (lastInterruptTime > 0) {
+      pulseDelta = interruptTime - lastInterruptTime;
+      newPulseDetected = true;
+    }
+    lastInterruptTime = interruptTime;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(PULSE_OUT_PIN, OUTPUT);
+  digitalWrite(PULSE_OUT_PIN, LOW);
+
+  // Attach Hardware Interrupt (Reed switch closure pulls pin LOW to GND)
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), reedISR, FALLING);
+
+  Wire.begin();
+
+  // Initialize OLED
+  u8g2.begin();
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.drawStr(0, 20, "FLOW SENSOR");
+  u8g2.drawStr(0, 40, "Initializing...");
+  u8g2.sendBuffer();
+
+  // Initialize RTC
+  if (!rtc.begin()) {
+    Serial.println("RTC not found!");
+  } else {
+    // Explicit sync to system compile time to fix corrupted register values
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); 
+    Serial.println("RTC time synchronized.");
+  }
+
+  // Initialize SD Card (Filename uses 8.3 format)
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("SD Card initialization failed!");
+  } else {
+    if (!SD.exists("datalog.csv")) {
+      File logFile = SD.open("datalog.csv", FILE_WRITE);
+      if (logFile) {
+        logFile.println("Measurement_Num,Timestamp,Interval_Pulses,Total_Pulses");
+        logFile.close();
+      }
+    }
+  }
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // 1. UPDATE RPM FROM INTERRUPT DATA
+  if (newPulseDetected) {
+    newPulseDetected = false;
+    if (pulseDelta > 0) {
+      currentRpm = 60000.0 / pulseDelta;
+    }
+    lastPulseTime = currentMillis;
+  }
+
+  // Zero out RPM if wheel stops turning for more than 5 seconds
+  if (currentMillis - lastPulseTime > 5000) {
+    currentRpm = 0.0;
+  }
+
+  // 2. ONE-MINUTE CSV LOGGING & OUTPUT PULSE
+  if (currentMillis - lastLogTime >= LOG_INTERVAL) {
+    lastLogTime = currentMillis;
+    measurementNum++;
+
+    // Safely snapshot and reset interval counter
+    noInterrupts();
+    unsigned long currentIntervalPulses = intervalPulses;
+    unsigned long currentTotalPulses = totalPulses;
+    intervalPulses = 0; // Reset minute tally
+    interrupts();
+
+    // Fetch RTC Timestamp
+    DateTime now = rtc.now();
+    char timestamp[20];
+    snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+             now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+
+    // Write row to CSV
+    File logFile = SD.open("datalog.csv", FILE_WRITE);
+    if (logFile) {
+      logFile.print(measurementNum);
+      logFile.print(",");
+      logFile.print(timestamp);
+      logFile.print(",");
+      logFile.print(currentIntervalPulses);
+      logFile.print(",");
+      logFile.println(currentTotalPulses);
+      logFile.close();
+      
+      Serial.print("Saved Measurement #");
+      Serial.println(measurementNum);
+    }
+
+    // Trigger pulse output to secondary Arduino (500ms duration for reliable capture)
+    digitalWrite(PULSE_OUT_PIN, HIGH);
+    delay(500);
+    digitalWrite(PULSE_OUT_PIN, LOW);
+  }
+
+  // 3. OLED DISPLAY REFRESH (Non-blocking)
+  if (currentMillis - lastOledUpdate >= OLED_INTERVAL) {
+    lastOledUpdate = currentMillis;
+
+    // Calculate countdown timer
+    int secondsRemaining = (LOG_INTERVAL - (currentMillis - lastLogTime)) / 1000;
+    if (secondsRemaining < 0) secondsRemaining = 0;
+
+    // Calculate linear speed of the wheel edge (m/s)
+    float wheelSpeedMs = (currentRpm * 2.0 * 3.14159 * WHEEL_RADIUS_M) / 60.0;
+
+    // Calculate estimated water speed accounting for slip/efficiency
+    float waterSpeedMs = 0.0;
+    if (WHEEL_EFFICIENCY > 0.0) {
+      waterSpeedMs = wheelSpeedMs / WHEEL_EFFICIENCY;
+    }
+
+    u8g2.clearBuffer();
+
+    // Header
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 10, "FLOW MONITOR");
+    u8g2.drawHLine(0, 13, 128);
+
+    // Current Count (Interval Tally)
+    u8g2.setCursor(0, 26);
+    u8g2.print("Window Count: ");
+    u8g2.print(intervalPulses);
+
+    // Calculated Instantaneous Speed
+    u8g2.setCursor(0, 38);
+    u8g2.print("Wheel Speed: ");
+    u8g2.print(currentRpm, 1);
+    u8g2.print(" RPM");
+
+    // Seconds until SD Save & Sync Pulse
+    u8g2.setCursor(0, 50);
+    u8g2.print("Next Sync: ");
+    u8g2.print(secondsRemaining);
+    u8g2.print("s");
+
+    // Estimated Water Speed
+    u8g2.setCursor(0, 62);
+    u8g2.print("Est. Flow: ");
+    u8g2.print(waterSpeedMs, 2);
+    u8g2.print(" m/s");
+
+    u8g2.sendBuffer();
+  }
+}
+```
+
+\
 
 ## The Depth Sensor
 
-### Bulding the Depth Sensor (dieses Kapitel braucht's hier eigentlich nicht, vllt eine Zeile dazu, dass der Sensor schon vorgefertigt ist)
+### Building the Depth Sensor
+
+While the pressure sensor comes as a complete unit, powering it and measuring the values from it is a bit more involved than just connecting it to the Arduino and reading the signal.
 
 ### Building the Hardware
 
+#### General wiring setup
+
+The sensor is of the common 4-20mA type analog sensor. It requires 12V power directly from the battery and a current-to-voltage-converter is connect to the circuit in series. The voltage is then fed into a digital-analog-converter, which relays the data to the Arduino over the I2C protocol.
+
 ### Building the Software
 
-
 ## Compiling the Sensors' Hardware and Installing them in a Stream
+
+## List of materials required
