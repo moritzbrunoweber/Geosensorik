@@ -3,7 +3,9 @@ title: "Measuring Flow Speed and Flow Depth of the Aare River"
 output: html_document
 ---
 
+```{r include=FALSE, message =FALSE}
 library(here)
+```
 
 # A Step by Step Manual to Recreate our Sensors
 
@@ -45,7 +47,340 @@ Due to time constraints, the pressure sensor data was measured and saved with a 
 
 As the signal from the reed switch is irregular and unpredictable, a hardware interrupt was used so that a signal from the switch takes priority over any other task, ensuring that no signals are missed due to updating the screen.
 
-#### Full code
+\
+
+## The Depth Sensor
+
+### Building the Depth Sensor
+
+While the pressure sensor comes as a complete unit, powering it and measuring the values from it is a bit more involved than just connecting it to the Arduino and reading the signal. The sensor comes on a long cable that includes a pressure relief tube inside it, so it automatically accounts for changes in ambient pressure.
+
+### Building the Hardware
+
+#### General wiring setup
+
+The sensor is of the common 4-20mA type analog sensor. It requires 12V power directly from the battery and a current-to-voltage-converter is connect to the circuit in series. The voltage is then fed into a digital-analog-converter, which relays the data to the Arduino over the I2C protocol. This data is then used to calculate the water depth.
+
+#### Interference/Crosstalk/Grounding problem
+
+When the voltage converter board for the Arduino and the pressure sensor 12V power are both connected to the same battery, this causes an issue in that the pressure reported is always around 65cm too deep and the signal fluctuates. We were not able to find out exactly what causes that problem, but an easy solution was to just install a second battery that only powers the pressure sensor. Using a galvanically isolated DC-DC-converter would likely also solve the problem while only requiring one battery.
+
+### Building the Software
+
+#### Basics
+
+At its core, the Arduino converts the voltage data received over I2C back to the current and then applies the linear relationship between it and depth to calculate the latter. This requires setting the possible current range (4-20mA in our case) and the maximum depth (5m in our case). Optionally, the water density can also be set.
+
+#### Data storage
+
+The Arduino saves the following to the SD-Card: A running counter for each measurement, the real-time timestamp for each measurement, the voltage from the converter, the current in the circuit and the water depth. The data is saved in a CSV file.
+
+#### Display output
+
+For easy troubleshooting, the OLED display on the Arduino was configured to display the following: The last measurement index, the time since the last signal from the other Arduino and the live voltage, current and depth data.
+
+#### Communication with second Arduino
+
+To ensure synchronised data points, the Arduino waits for pin D3 to receive the signal from the other one and saves the data to the SD card whenever it is received. The signal was never missed in our testing, but if that were to happen, the inclusion of the timestamp in both datasets would allow for a nearest-neighbour-algorithm so resync the two datasets.
+
+#### Interrupts
+
+As the signal from the other Arduino is not perfectly predictable (RTC drifting), a hardware interrupt was used so that it takes priority over any other task, ensuring that no signals are missed due to updating the screen.
+
+## Compiling the Sensors' Hardware and Installing them in a Stream
+
+### Water wheel
+
+The water wheel can be tied to any fixed object above the water level with two strings going to eyelet screws on the floats. In our case we attached it to a downed tree lying in the water, but pieces of rebar sticking out would work too. The flow direction should be relatively consistent as the wheel may overturn otherwise. Different positions of the screws on the floats can affect how the wheel sits in the water - ideally, it is perfectly level.
+
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 2: The complete installation (taken by authors)"}
+knitr::include_graphics(here::here("Installed.jpg"))
+```
+
+### Pressure sensor
+
+The pressure sensor was attached to a piece of rebar with zipties and this was then hammered into the ground. The position of the pressure sensor should be as close to the wheel as possible, but ideally downstream so it does not negatively affect flow.
+
+### Power and Arduinos
+
+The Arduinos, batteries and all the voltage and signal converters were installed on a piece of foam board that fits inside a RAKO box with cover. The wires were fed out through waterproof bungs. This box can be installed anywhere the wires reach, with the wire of the pressure sensor theoretically being the limiting factor. The box was attached to the same downed tree with two ratchet straps.
+
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 3: Schematic of the wiring in the box (created by authors)"}
+knitr::include_graphics(here::here("Schematic.png"))
+```
+
+```{r, echo=FALSE, out.width="100%", fig.cap="Figure 4: The internals of the box (taken by authors)"}
+knitr::include_graphics(here::here("Box.jpg"))
+```
+
+## List of materials required
+
+### Arduinos
+
+| Amount | Item                        |
+|:-------|:----------------------------|
+| 2      | Seeeduino Xiao              |
+| 2      | Seeeduino expansion boards  |
+| 2      | USB-A to USB-C power cables |
+
+### Power
+
+| Amount | Item                                |
+|:-------|:------------------------------------|
+| 2      | 12V batteries                       |
+| 1      | 12V Fuse block                      |
+| 2      | 3A Fuses                            |
+| 1      | DfRobot DFR0580 Solar Power Manager |
+
+### Water wheel
+
+| Amount | Item                                         |
+|:-------|:---------------------------------------------|
+|        | General wood pieces and screws for the frame |
+|        | Foam board for the water wheel               |
+| 1      | Hot glue gun                                 |
+|        | Magnet                                       |
+| 1      | Reed switch                                  |
+| 2      | Wires and pins                               |
+| 2      | Eyelet screws                                |
+| 2      | Metal rods and mounts for stability          |
+
+### Pressure sensor
+
+| Amount | Item                              |
+|:-------|:----------------------------------|
+| 1      | DfRobot KIT0139 Pressure sensor   |
+| 1      | SEN0262 Current-Voltage-Converter |
+| 1      | ADS1115 ADC                       |
+
+### Waterproofing / Mounting
+
+| Amount | Item                                           |
+|:-------|:-----------------------------------------------|
+|        | Wires/pins for internal connections            |
+| 1      | RAKO box with cover                            |
+| 2      | Waterproof bungs for the wires                 |
+| 1      | Piece of rebar and zipties for pressure sensor |
+|        | String for attaching water wheel               |
+| 2      | Straps for mounting the box                    |
+
+## Data analysis in R
+
+### Import the CSV files from the SD cards, combine them, format the timestamps and plot the initial data:
+
+```{r include=TRUE, message =FALSE}
+library(tidyverse)
+library(lubridate)
+library(slider)
+library(hexbin)
+library(usethis)
+library(gitcreds)
+library(broom)
+
+#Read CSV files
+reed <- read.csv(file = "DATALOG.CSV", header = TRUE)
+press <- read.csv(file = "PRESSLOG.CSV", header = TRUE)
+
+data <- cbind(reed, press[3:5])
+
+data <- data %>% #Mutate timestamps
+  mutate(Timestamp = ymd_hms(Timestamp) + hours(5) + minutes(14) + seconds(52))
+
+data <- data[-c(1:151, 1021:1024), ]
+
+data$Speed <- data$Interval_Pulses*pi*24/100/60
+
+# Pivot long and create stacked line charts
+data %>%
+  pivot_longer(cols = c(Interval_Pulses, Depth_mm), 
+               names_to = "Metric", 
+               values_to = "Value") %>%
+  ggplot(aes(x = Timestamp, y = Value, color = Metric)) +
+  geom_line(show.legend = FALSE) +
+  facet_wrap(~ Metric, scales = "free_y", ncol = 1) +
+  labs(
+    title = "River Depth vs. Water Wheel Activity",
+    x = "Timestamp",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
+### Create 10min smoothed versions of the data and plot for a cleaner appearance:
+
+```{r include=TRUE, message =FALSE}
+#Smooth datapoints over a 10min period
+Interval_Pulses_smooth <- slide_index_dbl(
+  data$Interval_Pulses, 
+  data$Timestamp, 
+  mean, 
+  .before = minutes(5), 
+  .after = minutes(5)
+)
+
+Speed_smooth <- slide_index_dbl(
+  data$Speed, 
+  data$Timestamp, 
+  mean, 
+  .before = minutes(5), 
+  .after = minutes(5)
+)
+
+Depth_mm_smooth <- slide_index_dbl(
+  data$Depth_mm, 
+  data$Timestamp, 
+  mean, 
+  .before = minutes(5), 
+  .after = minutes(5)
+)
+
+data$Interval_smooth <- Interval_Pulses_smooth
+data$Speed_smooth <- Speed_smooth
+data$Depth_smooth <- Depth_mm_smooth
+
+# Pivot long and create stacked line charts
+data %>%
+  pivot_longer(cols = c(Speed_smooth, Depth_smooth), 
+               names_to = "Metric", 
+               values_to = "Value") %>%
+  ggplot(aes(x = Timestamp, y = Value, color = Metric)) +
+  geom_line(show.legend = FALSE) +
+  facet_wrap(~ Metric, scales = "free_y", ncol = 1) +
+  labs(
+    title = "River Depth vs. Water Wheel Activity",
+    x = "Timestamp",
+    y = NULL
+  ) +
+  theme_minimal()
+
+```
+
+### Include manually exported rain data in 10min timesteps and plot:
+
+```{r include=TRUE, message =FALSE}
+# Manual rain entries (mm)
+rain_manual <- tribble(
+  ~time_str, ~Rain_mm,
+  "2026-08-20 20:30:00", 0.4,
+  "2026-08-20 20:40:00", 0.3,
+  "2026-08-21 01:30:00", 0.3,
+  "2026-08-21 01:40:00", 0.1,
+  "2026-08-21 01:50:00", 0.1,
+  "2026-08-21 02:00:00", 0.1,
+  "2026-08-21 02:50:00", 0.3,
+  "2026-08-21 03:00:00", 0.5,
+  "2026-08-21 03:10:00", 0.4,
+  "2026-08-21 07:00:00", 0.1,
+  "2026-08-21 07:10:00", 0.1,
+  "2026-08-21 07:20:00", 0.1,
+  "2026-08-21 07:30:00", 0.3,
+  "2026-08-21 07:40:00", 0.3,
+  "2026-08-21 07:50:00", 0.3,
+  "2026-08-21 08:00:00", 0.9,
+  "2026-08-21 08:10:00", 1.8,
+  "2026-08-21 08:20:00", 0.8,
+  "2026-08-21 08:30:00", 1.7,
+  "2026-08-21 08:40:00", 0.6,
+  "2026-08-21 08:50:00", 0.6
+) 
+
+rain_manual$Timestamp <- ymd_hms(rain_manual$time_str)
+
+# Floor timestamps to matching 10-min blocks and join rain
+data <- data %>%
+  mutate(Timestamp_10m = floor_date(Timestamp, "10 minutes")) %>%
+  left_join(rain_manual, by = c("Timestamp_10m" = "Timestamp")) %>%
+  mutate(Rain_mm = replace_na(Rain_mm, 0)) # Fill missing rain intervals with 0
+
+# Assign the smoothed vectors into the data frame as columns
+data$Interval_Pulses_smooth <- Interval_Pulses_smooth
+data$Speed_smooth <- Speed_smooth
+data$Depth_mm_smooth <- Depth_mm_smooth
+
+# Run the plot prep
+data_plot <- data %>%
+  select(Timestamp, Speed_smooth, Depth_mm_smooth, Rain_mm) %>%
+  pivot_longer(
+    cols = c(Speed_smooth, Depth_mm_smooth, Rain_mm), 
+    names_to = "Metric", 
+    values_to = "Value"
+  ) %>%
+  mutate(Metric = factor(Metric, 
+                         levels = c("Rain_mm", "Depth_mm_smooth", "Speed_smooth"),
+                         labels = c("Rainfall (mm)", "Depth (mm)", "Velocity (m/s)")))
+
+# Render the plot
+ggplot() +
+  geom_col(
+    data = filter(data_plot, Metric == "Rainfall (mm)"),
+    aes(x = Timestamp, y = Value),
+    fill = "#56B4E9",
+    width = 600
+  ) +
+  geom_line(
+    data = filter(data_plot, Metric != "Rainfall (mm)"),
+    aes(x = Timestamp, y = Value, color = Metric),
+    linewidth = 0.8,
+    show.legend = FALSE
+  ) +
+  facet_wrap(~ Metric, scales = "free_y", ncol = 1) +
+  scale_color_manual(values = c("Depth (mm)" = "#0072B2", "Velocity (m/s)" = "#D55E00")) +
+  labs(
+    title = "River Depth, Water Wheel Velocity, and Rainfall",
+    x = "Timestamp",
+    y = NULL
+  ) +
+  theme_minimal()
+
+```
+
+### Plot density distributions for the whole time period and before the big deviation (likely due to a mechanical issue with the wheel):
+
+```{r include=TRUE, message =FALSE}
+#Original data
+ggplot(data, aes(x = Depth_mm, y = Speed)) +
+  geom_density_2d_filled(alpha = 0.8) +
+  geom_smooth(method = "lm", color = "#D55E00", se = TRUE) +
+  labs(title = "Density Distribution: Velocity vs. Depth", x = "Depth (mm)", y = "Velocity (m/s)") +
+  theme_minimal()
+
+data_cut <- data[1:632,]
+
+#Data before the deviation
+ggplot(data_cut, aes(x = Depth_mm, y = Speed)) +
+  geom_density_2d_filled(alpha = 0.8) +
+  geom_smooth(method = "lm", color = "#D55E00", se = TRUE) +
+  labs(title = "Density Distribution: Velocity vs. Depth (cut data)", x = "Depth (mm)", y = "Velocity (m/s)") +
+  theme_minimal()
+
+#Data before the deviation and smoothed
+ggplot(data_cut, aes(x = Depth_mm_smooth, y = Speed_smooth)) +
+  geom_density_2d_filled(alpha = 0.8) +
+  geom_smooth(method = "lm", color = "#D55E00", se = TRUE) +
+  labs(title = "Density Distribution: Velocity vs. Depth (cut data), 10min intervals", x = "Depth (mm)", y = "Velocity (m/s)") +
+  theme_minimal()
+
+```
+
+### Fit linear model between pressure and flow velocity and output key values
+
+```{r include=TRUE, message =TRUE}
+# Fit the linear model (y ~ x)
+fit <- lm(Interval_Pulses ~ Depth_mm, data = data)
+fit_cut <- lm(Interval_Pulses ~ Depth_mm, data = data_cut)
+fit_smooth <- lm(Interval_Pulses_smooth ~ Depth_mm_smooth, data = data)
+fit_smooth_cut <- lm(Interval_Pulses_smooth ~ Depth_mm_smooth, data = data_cut)
+
+# View the full statistical output (includes p-value, R-squared, and coefficients)
+glance(fit)[, c("r.squared", "p.value")] #Original data
+glance(fit_cut)[, c("r.squared", "p.value")] #Data before deviation
+glance(fit_smooth)[, c("r.squared", "p.value")] #Data smoothed 10min
+glance(fit_smooth_cut)[, c("r.squared", "p.value")] #Data before deviation smoothed 10min
+```
+
+## Appendices
+
+### Full code for Arduino 1 (Water wheel)
 
 ```         
 #include <SPI.h>  // Communicate with SPI devices
@@ -260,47 +595,7 @@ void loop() {
 }
 ```
 
-\
-
-## The Depth Sensor
-
-### Building the Depth Sensor
-
-While the pressure sensor comes as a complete unit, powering it and measuring the values from it is a bit more involved than just connecting it to the Arduino and reading the signal. The sensor comes on a long cable that includes a pressure relief tube inside it, so it automatically accounts for changes in ambient pressure.
-
-### Building the Hardware
-
-#### General wiring setup
-
-The sensor is of the common 4-20mA type analog sensor. It requires 12V power directly from the battery and a current-to-voltage-converter is connect to the circuit in series. The voltage is then fed into a digital-analog-converter, which relays the data to the Arduino over the I2C protocol. This data is then used to calculate the water depth.
-
-#### Interference/Crosstalk/Grounding problem
-
-When the voltage converter board for the Arduino and the pressure sensor 12V power are both connected to the same battery, this causes an issue in that the pressure reported is always around 65cm too deep and the signal fluctuates. We were not able to find out exactly what causes that problem, but an easy solution was to just install a second battery that only powers the pressure sensor. Using a galvanically isolated DC-DC-converter would likely also solve the problem while only requiring one battery.
-
-### Building the Software
-
-#### Basics
-
-At its core, the Arduino converts the voltage data received over I2C back to the current and then applies the linear relationship between it and depth to calculate the latter. This requires setting the possible current range (4-20mA in our case) and the maximum depth (5m in our case). Optionally, the water density can also be set.
-
-#### Data storage
-
-The Arduino saves the following to the SD-Card: A running counter for each measurement, the real-time timestamp for each measurement, the voltage from the converter, the current in the circuit and the water depth. The data is saved in a CSV file.
-
-#### Display output
-
-For easy troubleshooting, the OLED display on the Arduino was configured to display the following: The last measurement index, the time since the last signal from the other Arduino and the live voltage, current and depth data.
-
-#### Communication with second Arduino
-
-To ensure synchronised data points, the Arduino waits for pin D3 to receive the signal from the other one and saves the data to the SD card whenever it is received. The signal was never missed in our testing, but if that were to happen, the inclusion of the timestamp in both datasets would allow for a nearest-neighbour-algorithm so resync the two datasets.
-
-#### Interrupts
-
-As the signal from the other Arduino is not perfectly predictable (RTC drifting), a hardware interrupt was used so that it takes priority over any other task, ensuring that no signals are missed due to updating the screen.
-
-#### Full code
+### Full code for Arduino 2 (Pressure sensor)
 
 ```         
 #include <Wire.h>             // Communicate with I2C devices
@@ -481,287 +776,4 @@ void loop(void) {
     u8g2.sendBuffer();
   }
 }
-```
-
-## Compiling the Sensors' Hardware and Installing them in a Stream
-
-### Water wheel
-
-The water wheel can be tied to any fixed object above the water level with two strings going to eyelet screws on the floats. In our case we attached it to a downed tree lying in the water, but pieces of rebar sticking out would work too. The flow direction should be relatively consistent as the wheel may overturn otherwise. Different positions of the screws on the floats can affect how the wheel sits in the water - ideally, it is perfectly level.
-
-```{r, echo=FALSE, out.width="100%", fig.cap="Figure 2: The complete installation (taken by authors)"}
-knitr::include_graphics(here::here("Installed.jpg"))
-```
-
-### Pressure sensor
-
-The pressure sensor was attached to a piece of rebar with zipties and this was then hammered into the ground. The position of the pressure sensor should be as close to the wheel as possible, but ideally downstream so it does not negatively affect flow.
-
-### Power and Arduinos
-
-The Arduinos, batteries and all the voltage and signal converters were installed on a piece of foam board that fits inside a RAKO box with cover. The wires were fed out through waterproof bungs. This box can be installed anywhere the wires reach, with the wire of the pressure sensor theoretically being the limiting factor. The box was attached to the same downed tree with two ratchet straps.
-
-```{r, echo=FALSE, out.width="100%", fig.cap="Figure 3: Schematic of the wiring in the box (created by authors)"}
-knitr::include_graphics(here::here("Schematic.png"))
-```
-
-```{r, echo=FALSE, out.width="100%", fig.cap="Figure 4: The internals of the box (taken by authors)"}
-knitr::include_graphics(here::here("Box.jpg"))
-```
-
-## List of materials required
-
-### Arduinos
-
-| Amount | Item                        |
-|:-------|:----------------------------|
-| 2      | Seeeduino Xiao              |
-| 2      | Seeeduino expansion boards  |
-| 2      | USB-A to USB-C power cables |
-
-### Power
-
-| Amount | Item           |
-|:-------|:---------------|
-| 2      | 12V batteries  |
-| 1      | 12V Fuse block |
-| 2      | 3A Fuses       |
-
-### Water wheel
-
-| Amount | Item                                         |
-|:-------|:---------------------------------------------|
-|        | General wood pieces and screws for the frame |
-|        | Foam board for the water wheel               |
-| 1      | Hot glue gun                                 |
-|        | Magnet                                       |
-| 1      | Reed switch                                  |
-| 2      | Wires and pins                               |
-| 2      | Eyelet screws                                |
-| 2      | Metal rods and mounts for stability          |
-
-### Pressure sensor
-
-| Amount | Item                              |
-|:-------|:----------------------------------|
-| 1      | DfRobot KIT0139 Pressure sensor   |
-| 1      | SEN0262 Current-Voltage-Converter |
-| 1      | ADS1115 ADC                       |
-
-### Waterproofing / Mounting
-
-| Amount | Item                                           |
-|:-------|:-----------------------------------------------|
-|        | Wires/pins for internal connections            |
-| 1      | RAKO box with cover                            |
-| 2      | Waterproof bungs for the wires                 |
-| 1      | Piece of rebar and zipties for pressure sensor |
-|        | String for attaching water wheel               |
-| 2      | Straps for mounting the box                    |
-
-## Data analysis in R
-
-### Import the CSV files from the SD cards, combine them, format the timestamps and plot the initial data:
-
-```{r include=TRUE, message =FALSE}
-library(tidyverse)
-library(lubridate)
-library(slider)
-library(hexbin)
-library(usethis)
-library(gitcreds)
-
-reed <- read.csv(file = "DATALOG.CSV", header = TRUE)
-press <- read.csv(file = "PRESSLOG.CSV", header = TRUE)
-
-data <- cbind(reed, press[3:5])
-
-data <- data %>%
-  mutate(Timestamp = ymd_hms(Timestamp) + hours(5) + minutes(14) + seconds(52))
-
-data <- data[-c(1:151, 1021:1024), ]
-
-data$Speed <- data$Interval_Pulses*pi*24/100/60
-
-# Pivot long and create stacked line charts
-data %>%
-  pivot_longer(cols = c(Interval_Pulses, Depth_mm), 
-               names_to = "Metric", 
-               values_to = "Value") %>%
-  ggplot(aes(x = Timestamp, y = Value, color = Metric)) +
-  geom_line(show.legend = FALSE) +
-  facet_wrap(~ Metric, scales = "free_y", ncol = 1) +
-  labs(
-    title = "River Depth vs. Water Wheel Activity",
-    x = "Timestamp",
-    y = NULL
-  ) +
-  theme_minimal()
-```
-
-### Create 10min smoothed versions of the data and plot for a cleaner appearance:
-
-```{r include=TRUE, message =FALSE}
-Interval_Pulses_smooth <- slide_index_dbl(
-  data$Interval_Pulses, 
-  data$Timestamp, 
-  mean, 
-  .before = minutes(5), 
-  .after = minutes(5)
-)
-
-Speed_smooth <- slide_index_dbl(
-  data$Speed, 
-  data$Timestamp, 
-  mean, 
-  .before = minutes(5), 
-  .after = minutes(5)
-)
-
-Depth_mm_smooth <- slide_index_dbl(
-  data$Depth_mm, 
-  data$Timestamp, 
-  mean, 
-  .before = minutes(5), 
-  .after = minutes(5)
-)
-
-data$Interval_smooth <- Interval_Pulses_smooth
-data$Speed_smooth <- Speed_smooth
-data$Depth_smooth <- Depth_mm_smooth
-
-# Pivot long and create stacked line charts
-data %>%
-  pivot_longer(cols = c(Speed_smooth, Depth_smooth), 
-               names_to = "Metric", 
-               values_to = "Value") %>%
-  ggplot(aes(x = Timestamp, y = Value, color = Metric)) +
-  geom_line(show.legend = FALSE) +
-  facet_wrap(~ Metric, scales = "free_y", ncol = 1) +
-  labs(
-    title = "River Depth vs. Water Wheel Activity",
-    x = "Timestamp",
-    y = NULL
-  ) +
-  theme_minimal()
-
-```
-
-### Include manually exported rain data in 10min timesteps and plot:
-
-```{r include=TRUE, message =FALSE}
-# Manual rain entries (mm)
-rain_manual <- tribble(
-  ~time_str, ~Rain_mm,
-  "2026-08-20 20:30:00", 0.4,
-  "2026-08-20 20:40:00", 0.3,
-  "2026-08-21 01:30:00", 0.3,
-  "2026-08-21 01:40:00", 0.1,
-  "2026-08-21 01:50:00", 0.1,
-  "2026-08-21 02:00:00", 0.1,
-  "2026-08-21 02:50:00", 0.3,
-  "2026-08-21 03:00:00", 0.5,
-  "2026-08-21 03:10:00", 0.4,
-  "2026-08-21 07:00:00", 0.1,
-  "2026-08-21 07:10:00", 0.1,
-  "2026-08-21 07:20:00", 0.1,
-  "2026-08-21 07:30:00", 0.3,
-  "2026-08-21 07:40:00", 0.3,
-  "2026-08-21 07:50:00", 0.3,
-  "2026-08-21 08:00:00", 0.9,
-  "2026-08-21 08:10:00", 1.8,
-  "2026-08-21 08:20:00", 0.8,
-  "2026-08-21 08:30:00", 1.7,
-  "2026-08-21 08:40:00", 0.6,
-  "2026-08-21 08:50:00", 0.6
-) 
-
-rain_manual$Timestamp <- ymd_hms(rain_manual$time_str)
-
-# Floor timestamps to matching 10-min blocks and join rain
-data <- data %>%
-  mutate(Timestamp_10m = floor_date(Timestamp, "10 minutes")) %>%
-  left_join(rain_manual, by = c("Timestamp_10m" = "Timestamp")) %>%
-  mutate(Rain_mm = replace_na(Rain_mm, 0)) # Fill missing rain intervals with 0
-
-# Assign the smoothed vectors into the data frame as columns
-data$Interval_Pulses_smooth <- Interval_Pulses_smooth
-data$Speed_smooth <- Speed_smooth
-data$Depth_mm_smooth <- Depth_mm_smooth
-
-# Now run the plot prep pipeline
-data_plot <- data %>%
-  select(Timestamp, Speed_smooth, Depth_mm_smooth, Rain_mm) %>%
-  pivot_longer(
-    cols = c(Speed_smooth, Depth_mm_smooth, Rain_mm), 
-    names_to = "Metric", 
-    values_to = "Value"
-  ) %>%
-  mutate(Metric = factor(Metric, 
-                         levels = c("Rain_mm", "Depth_mm_smooth", "Speed_smooth"),
-                         labels = c("Rainfall (mm)", "Depth (mm)", "Velocity (m/s)")))
-
-# Render the plot
-ggplot() +
-  geom_col(
-    data = filter(data_plot, Metric == "Rainfall (mm)"),
-    aes(x = Timestamp, y = Value),
-    fill = "#56B4E9",
-    width = 600
-  ) +
-  geom_line(
-    data = filter(data_plot, Metric != "Rainfall (mm)"),
-    aes(x = Timestamp, y = Value, color = Metric),
-    linewidth = 0.8,
-    show.legend = FALSE
-  ) +
-  facet_wrap(~ Metric, scales = "free_y", ncol = 1) +
-  scale_color_manual(values = c("Depth (mm)" = "#0072B2", "Velocity (m/s)" = "#D55E00")) +
-  labs(
-    title = "River Depth, Water Wheel Velocity, and Rainfall",
-    x = "Timestamp",
-    y = NULL
-  ) +
-  theme_minimal()
-
-```
-
-### Plot density distributions for the whole time period and before the big deviation (likely due to a mechanical issue with the wheel):
-
-```{r include=TRUE, message =FALSE}
-ggplot(data, aes(x = Depth_mm, y = Speed)) +
-  geom_density_2d_filled(alpha = 0.8) +
-  geom_smooth(method = "lm", color = "#D55E00", se = TRUE) +
-  labs(title = "Density Distribution: Velocity vs. Depth", x = "Depth (mm)", y = "Velocity (m/s)") +
-  theme_minimal()
-
-data_cut <- data[1:632,]
-
-ggplot(data_cut, aes(x = Depth_mm, y = Speed)) +
-  geom_density_2d_filled(alpha = 0.8) +
-  geom_smooth(method = "lm", color = "#D55E00", se = TRUE) +
-  labs(title = "Density Distribution: Velocity vs. Depth (cut data)", x = "Depth (mm)", y = "Velocity (m/s)") +
-  theme_minimal()
-
-ggplot(data_cut, aes(x = Depth_mm_smooth, y = Speed_smooth)) +
-  geom_density_2d_filled(alpha = 0.8) +
-  geom_smooth(method = "lm", color = "#D55E00", se = TRUE) +
-  labs(title = "Density Distribution: Velocity vs. Depth (cut data), 10min intervals", x = "Depth (mm)", y = "Velocity (m/s)") +
-  theme_minimal()
-
-```
-
-### Fit linear model between pressure and flow velocity and output key values
-```{r include=TRUE, message =TRUE}
-# 1. Fit the linear model (y ~ x)
-fit <- lm(Interval_Pulses ~ Depth_mm, data = data)
-fit_cut <- lm(Interval_Pulses ~ Depth_mm, data = data_cut)
-fit_smooth <- lm(Interval_Pulses_smooth ~ Depth_mm_smooth, data = data)
-fit_smooth_cut <- lm(Interval_Pulses_smooth ~ Depth_mm_smooth, data = data_cut)
-
-# 2. View the full statistical output (includes p-value, R-squared, and coefficients)
-summary(fit)
-summary(fit_cut)
-summary(fit_smooth)
-summary(fit_smooth_cut)
 ```
